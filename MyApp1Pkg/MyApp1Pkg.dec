@@ -1,0 +1,31 @@
+## @file
+# This package is a platform package that provide platform module/library 
+# required by NT32 platform.
+#
+# File/Directory Orignazation:
+# |- Sec            : Emulation SecCore for Nt32 platform
+# |- *Pei           : PEIM drivers
+# |- *Dxe           : DXE drivers
+# |- Nt32Pkg.dec    : This file
+# |- Nt32Pkg.dsc    : Nt32 platform DSC file
+# |- Nt32Pkg.fdf    : Flash description file for Nt32Pkg. It is used for creating FD file.
+# |- Include        : Include files for Nt32Pkg
+# 
+#
+# Copyright (c) 2007 - 2011, Intel Corporation. All rights reserved.<BR>
+#
+# This program and the accompanying materials
+# are licensed and made available under the terms and conditions of the BSD License
+# which accompanies this distribution. The full text of the license may be found at
+# http://opensource.org/licenses/bsd-license.php
+#
+# THE PROGRAM IS DISTRIBUTED UNDER THE BSD LICENSE ON AN "AS IS" BASIS,
+# WITHOUT WARRANTIES OR REPRESENTATIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED.
+#
+#
+
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = MyApp1Pkg
+  PACKAGE_GUID                   = d6a78c81-0d7f-4b46-af1d-e6ed44e5ffaa
+  PACKAGE_VERSION                = 0.1
