@@ -1,0 +1,5 @@
+[Defines]
+  DEC_SPECIFICATION              = 0x00010005
+  PACKAGE_NAME                   = MyBootLoader
+  PACKAGE_GUID                   = 00276b66-ad1d-4f4a-83a0-fb9bf2c922c6
+  PACKAGE_VERSION                = 0.1
