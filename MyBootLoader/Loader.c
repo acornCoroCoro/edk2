@@ -86,7 +86,7 @@ EFI_STATUS EFIAPI UefiMain(
     }
 
     Elf64_Ehdr *Ehdr = (Elf64_Ehdr*)KernelFileAddr;
-    if (Ehdr->e_ident[0] != 0x7f || AsciiStrnCmp((CHAR8*)Ehdr->e_ident + 1, "ELF", 3) != 0) {
+    if (AsciiStrnCmp((CHAR8*)Ehdr->e_ident, "\x7f" "ELF", 4) != 0) {
         Print(L"Kernel file is not elf.\n");
         return EFI_LOAD_ERROR;
     }
