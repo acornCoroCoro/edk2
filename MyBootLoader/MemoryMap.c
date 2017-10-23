@@ -40,13 +40,40 @@ EFI_STATUS GetMemoryMap(
     IN struct MemoryMap *Map
     )
 {
-    Map->MapSize = Map->BufferSize;
-    return gBS->GetMemoryMap(
-        &Map->MapSize,
-        (EFI_MEMORY_DESCRIPTOR*)Map->Buffer,
-        &Map->MapKey,
-        &Map->DescriptorSize,
-        &Map->DescriptorVersion);
+    EFI_STATUS Status;
+
+    if (Map->BufferSize == 0 && Map->Buffer == NULL) {
+        Status = AllocateMemoryMap(Map, 4096);
+        if (EFI_ERROR(Status)) {
+            return Status;
+        }
+    }
+
+    for (;;) {
+        Map->MapSize = Map->BufferSize;
+        Status = gBS->GetMemoryMap(
+            &Map->MapSize,
+            (EFI_MEMORY_DESCRIPTOR*)Map->Buffer,
+            &Map->MapKey,
+            &Map->DescriptorSize,
+            &Map->DescriptorVersion);
+
+        if (Status == EFI_BUFFER_TOO_SMALL) {
+            const UINTN NewBufferSize = (Map->MapSize + 4095) & ~(UINTN)4095;
+            Print(L"Re-allocating buf. New size = %lu: %r\n", NewBufferSize, Status);
+
+            Status = gBS->FreePool(Map->Buffer);
+            if (EFI_ERROR(Status)) {
+                return Status;
+            }
+            Status = AllocateMemoryMap(Map, NewBufferSize);
+            if (EFI_ERROR(Status)) {
+                return Status;
+            }
+            continue;
+        }
+        return Status;
+    }
 }
 
 EFI_STATUS SaveMemoryMap(

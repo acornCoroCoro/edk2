@@ -118,14 +118,18 @@ EFI_STATUS EFIAPI UefiMain(
     EntryPointType *EntryPoint = (EntryPointType*)Ehdr->e_entry;
     Print(L"Entry point: %08p\n", EntryPoint);
 
-    // Get memory map
-    struct MemoryMap MemoryMap;
-    Status = AllocateMemoryMap(&MemoryMap, 4096);
+    // Open memory map file
+    EFI_FILE_PROTOCOL *MemoryMapFile;
+    Status = RootDir->Open(RootDir, &MemoryMapFile, L"\\memmap",
+        EFI_FILE_MODE_READ | EFI_FILE_MODE_WRITE | EFI_FILE_MODE_CREATE, 0);
     if (EFI_ERROR(Status)) {
-        Print(L"Could not allocate memory map: %r\n", Status);
-        return Status;
+        Print(L"Could not open memory map file: %r\n", Status);
+        Print(L"Ignoreing...\n");
+        MemoryMapFile = NULL;
     }
 
+    // Get memory map
+    struct MemoryMap MemoryMap = {0, NULL, 0, 0, 0, 0};
     Status = GetMemoryMap(&MemoryMap);
     if (EFI_ERROR(Status)) {
         Print(L"Could not get current memory map: %r\n", Status);
@@ -136,7 +140,21 @@ EFI_STATUS EFIAPI UefiMain(
         (EFI_PHYSICAL_ADDRESS)MemoryMap.Buffer, MemoryMap.MapSize,
         MemoryMap.DescriptorSize, MemoryMap.DescriptorVersion, MemoryMap.MapKey);
 
-    //Pause();
+    if (MemoryMapFile) {
+        Status = SaveMemoryMap(&MemoryMap, MemoryMapFile);
+        if (EFI_ERROR(Status)) {
+            Print(L"Could not save current memory map: %r\n", Status);
+            return Status;
+        }
+
+        Status = MemoryMapFile->Close(MemoryMapFile);
+        if (EFI_ERROR(Status)) {
+            Print(L"Could not close memory map file: %r\n", Status);
+            return Status;
+        }
+    }
+
+    Pause();
 
     // Exit boot services
     Status = gBS->ExitBootServices(ImageHandle, MemoryMap.MapKey);
