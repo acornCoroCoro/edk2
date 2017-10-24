@@ -91,6 +91,50 @@ EFI_STATUS EFIAPI UefiMain(
         return EFI_LOAD_ERROR;
     }
 
+    EFI_PHYSICAL_ADDRESS KernelMemAddr = 0;
+    UINTN KernelMemSize = 0;
+    Elf64_Phdr *Phdr = ELF64_GET_PHDR(Ehdr);
+    for (UINTN i = 0; i < Ehdr->e_phnum; ++i) {
+        Print(L"Processing a program header %lu, type = %lu\n", i, Phdr[i].p_type);
+        if (Phdr[i].p_type == PT_LOAD) {
+            Print(L"Program header %lu: vaddr %08x, offset %x, filesz %x, memsz %x\n",
+                    i, Phdr[i].p_vaddr, Phdr[i].p_offset, Phdr[i].p_filesz, Phdr[i].p_memsz);
+            if (Phdr[i].p_vaddr != 0) {
+                Print(L"This loader assumes vaddr is zero.\n");
+                while (1);
+                return EFI_INVALID_PARAMETER;
+            }
+
+            Status = gBS->AllocatePages(
+                AllocateAnyPages,
+                EfiLoaderData,
+                (Phdr[i].p_memsz + 4095) / 4096,
+                &KernelMemAddr);
+            if (EFI_ERROR(Status)) {
+                Print(L"Could not allocate pages for dynamic load: %r\n", Status);
+                while (1);
+                return Status;
+            }
+
+            if (Phdr[i].p_filesz > 0) {
+                CopyMem((VOID*)KernelMemAddr, // destination
+                        (VOID*)(KernelFileAddr + Phdr[i].p_offset), // source
+                        Phdr[i].p_filesz); // length
+                Print(L"Copied kernel image %08x -> %08x (%08x bytes)\n",
+                        KernelFileAddr, KernelMemAddr, Phdr[i].p_filesz);
+                }
+            if (Phdr[i].p_memsz > Phdr[i].p_filesz) {
+                ZeroMem((VOID*)(KernelMemAddr + Phdr[i].p_filesz),
+                        Phdr[i].p_memsz - Phdr[i].p_filesz);
+            }
+
+            KernelMemSize = Phdr[i].p_memsz;
+        } else if (Phdr[i].p_type == PT_DYNAMIC) {
+            Elf64_Dyn *Dynamic = (Elf64_Dyn*)(KernelMemAddr + Phdr[i].p_offset);
+            RelocateDynamic(KernelMemAddr, Dynamic);
+        }
+    }
+
     typedef void (CtorType)(void);
     Elf64_Shdr *CtorsSection = Elf64_FindSection(Ehdr, ".ctors");
     if (CtorsSection == NULL)
@@ -99,8 +143,9 @@ EFI_STATUS EFIAPI UefiMain(
     }
     else
     {
-        for (UINT64 *Ctor = (UINT64*)CtorsSection->sh_addr;
-                Ctor < (UINT64*)(CtorsSection->sh_addr + CtorsSection->sh_size);
+        EFI_PHYSICAL_ADDRESS CtorsAddr = KernelMemAddr + CtorsSection->sh_offset;
+        for (UINT64 *Ctor = (UINT64*)CtorsAddr;
+                Ctor < (UINT64*)(CtorsAddr + CtorsSection->sh_size);
                 ++Ctor)
         {
             Print(L"Calling a ctor: %08lx\n", Ctor);
@@ -112,10 +157,11 @@ EFI_STATUS EFIAPI UefiMain(
     //RelocateAll(Ehdr);
 
     Print(L"Successfully loaded kernel: Buf=0x%08lx Siz=0x%lx\n",
-        KernelFileAddr, KernelFileSize);
+        KernelMemAddr, KernelMemSize);
 
     typedef unsigned long (EntryPointType)(struct BootParam *param);
-    EntryPointType *EntryPoint = (EntryPointType*)Ehdr->e_entry;
+    // assume that kernel.elf linked at zero address.
+    EntryPointType *EntryPoint = (EntryPointType*)(Ehdr->e_entry + KernelMemAddr);
     Print(L"Entry point: %08p\n", EntryPoint);
 
     // Open memory map file

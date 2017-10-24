@@ -135,6 +135,10 @@ typedef struct {
 	Elf64_Size p_align;
 } Elf64_Phdr;
 
+#define PT_NULL 0
+#define PT_LOAD 1
+#define PT_DYNAMIC 2
+
 #define PF_X 1
 #define PF_W 2
 #define PF_R 4
@@ -190,6 +194,19 @@ typedef struct {
 #define R_386_PC32 2
 
 #define R_X86_64_RELATIVE 8
+
+typedef struct {
+	Elf64_Xword d_tag;
+	union {
+		Elf64_Xword d_val;
+		Elf64_Addr d_ptr;
+	} d_un;
+} Elf64_Dyn;
+
+#define DT_NULL 0
+#define DT_RELA 7
+#define DT_RELAENT 9
+#define DT_RELACOUNT 0x000000006ffffff9
 
 // Utilities
 
