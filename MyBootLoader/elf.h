@@ -55,6 +55,12 @@ typedef struct {
 	Elf64_Half e_shstrndx;
 } Elf64_Ehdr;
 
+#define ET_NONE 0
+#define ET_REL  1
+#define ET_EXEC 2
+#define ET_DYN  3
+#define ET_CORE 4
+
 #define IS_ELF(ehdr) \
 	((ehdr).e_ident[0] == 0x7f && \
 	 (ehdr).e_ident[1] == 'E' && \

@@ -19,6 +19,65 @@
 #include "bootparam.h"
 #include "elf.h"
 
+EFI_PHYSICAL_ADDRESS AlignAddress(EFI_PHYSICAL_ADDRESS Address, UINTN Alignment)
+{
+    CONST EFI_PHYSICAL_ADDRESS Mask = Alignment - 1;
+    return (Address + Mask) & ~Mask;
+}
+
+EFI_PHYSICAL_ADDRESS GetSegmentEndAddress(Elf64_Phdr *Phdr)
+{
+    return AlignAddress(Phdr->p_vaddr + Phdr->p_memsz, Phdr->p_align);
+}
+
+VOID CalcSegmentStartAndSize(Elf64_Ehdr *Ehdr,
+                             EFI_PHYSICAL_ADDRESS *SegmentStartAddr,
+                             UINTN *SegmentSize)
+{
+    UINTN i = 0;
+    Elf64_Phdr *Phdr = ELF64_GET_PHDR(Ehdr);
+
+    for (; i < Ehdr->e_phnum && Phdr[i].p_type != PT_LOAD; ++i);
+
+    EFI_PHYSICAL_ADDRESS Start = Phdr[i].p_vaddr;
+    EFI_PHYSICAL_ADDRESS End = GetSegmentEndAddress(&Phdr[i]);
+    ++i;
+
+    for (; i < Ehdr->e_phnum; ++i) {
+        if (Phdr[i].p_type != PT_LOAD) continue;
+
+        if (Start > Phdr[i].p_vaddr) {
+            Start = Phdr[i].p_vaddr;
+        }
+
+        CONST EFI_PHYSICAL_ADDRESS SegEnd = GetSegmentEndAddress(&Phdr[i]);
+        if (End < SegEnd) {
+            End = SegEnd;
+        }
+    }
+
+    *SegmentStartAddr = Start;
+    *SegmentSize = End - Start;
+}
+
+VOID CopyOneSegment(Elf64_Phdr *Phdr,
+                    EFI_PHYSICAL_ADDRESS ImageBaseAddr,
+                    EFI_PHYSICAL_ADDRESS LoadAddr)
+{
+    if (Phdr->p_filesz > 0) {
+        CopyMem((VOID*)(Phdr->p_vaddr + LoadAddr), // destination
+                (VOID*)(ImageBaseAddr + Phdr->p_offset), // source
+                Phdr->p_filesz); // length
+        Print(L"Copied image block %08x -> %08x (%08x bytes)\n",
+                ImageBaseAddr + Phdr->p_offset,
+                Phdr->p_vaddr + LoadAddr, Phdr->p_filesz);
+    }
+    if (Phdr->p_memsz > Phdr->p_filesz) {
+        ZeroMem((VOID*)(Phdr->p_vaddr + LoadAddr + Phdr->p_filesz),
+                Phdr->p_memsz - Phdr->p_filesz);
+    }
+}
+
 EFI_STATUS EFIAPI UefiMain(
     IN EFI_HANDLE ImageHandle,
     IN EFI_SYSTEM_TABLE *SystemTable
@@ -65,9 +124,9 @@ EFI_STATUS EFIAPI UefiMain(
     Print(L"Kernel file size is %lu = 0x%lx\n", KernelFileSize, KernelFileSize);
 
     // Allocate buffer for the kernel file
-    EFI_PHYSICAL_ADDRESS KernelFileAddr = 0x00100000lu;
+    EFI_PHYSICAL_ADDRESS KernelFileAddr = 0;
     Status = gBS->AllocatePages(
-        AllocateAddress,
+        AllocateAnyPages,
         EfiLoaderData,
         (KernelFileSize + 4095) / 4096,
         &KernelFileAddr);
@@ -91,50 +150,53 @@ EFI_STATUS EFIAPI UefiMain(
         return EFI_LOAD_ERROR;
     }
 
-    EFI_PHYSICAL_ADDRESS KernelMemAddr = 0;
-    UINTN KernelMemSize = 0;
+    // PIE or not
+    BOOLEAN IsPIEKernel = FALSE;
+    if (Ehdr->e_type == ET_DYN) { // PIE
+        IsPIEKernel = TRUE;
+    }
+
+    // Calculate memory size for all PT_LOAD segments
+    EFI_PHYSICAL_ADDRESS SegmentStartAddr;
+    UINTN SegmentSize;
+    CalcSegmentStartAndSize(Ehdr, &SegmentStartAddr, &SegmentSize);
+
+    CONST UINTN MemAllocPages = (SegmentSize + 4095) / 4096;
+    EFI_PHYSICAL_ADDRESS MemAllocAddr = SegmentStartAddr;
+
+    // Allocate memory block for all PT_LOAD segments
+    Status = gBS->AllocatePages(
+        IsPIEKernel ? AllocateAnyPages : AllocateAddress,
+        EfiLoaderData,
+        MemAllocPages,
+        &MemAllocAddr);
+    if (EFI_ERROR(Status)) {
+        Print(L"Could not allocate pages for dynamic load: %r\n", Status);
+        while (1);
+        return Status;
+    }
+
+    EFI_PHYSICAL_ADDRESS LoadAddr = IsPIEKernel ? MemAllocAddr : 0;
+
+    Print(L"Kernel is %s, Load Addr %08lx, Segment Addr %08lx - %08lx, \n",
+            IsPIEKernel ? L"PIE" : L"No-PIE",
+            LoadAddr, SegmentStartAddr, SegmentStartAddr + SegmentSize);
+
+    // Copy segments and apply relocation
     Elf64_Phdr *Phdr = ELF64_GET_PHDR(Ehdr);
     for (UINTN i = 0; i < Ehdr->e_phnum; ++i) {
         Print(L"Processing a program header %lu, type = %lu\n", i, Phdr[i].p_type);
         if (Phdr[i].p_type == PT_LOAD) {
             Print(L"Program header %lu: vaddr %08x, offset %x, filesz %x, memsz %x\n",
                     i, Phdr[i].p_vaddr, Phdr[i].p_offset, Phdr[i].p_filesz, Phdr[i].p_memsz);
-            if (Phdr[i].p_vaddr != 0) {
-                Print(L"This loader assumes vaddr is zero.\n");
-                while (1);
-                return EFI_INVALID_PARAMETER;
-            }
-
-            Status = gBS->AllocatePages(
-                AllocateAnyPages,
-                EfiLoaderData,
-                (Phdr[i].p_memsz + 4095) / 4096,
-                &KernelMemAddr);
-            if (EFI_ERROR(Status)) {
-                Print(L"Could not allocate pages for dynamic load: %r\n", Status);
-                while (1);
-                return Status;
-            }
-
-            if (Phdr[i].p_filesz > 0) {
-                CopyMem((VOID*)KernelMemAddr, // destination
-                        (VOID*)(KernelFileAddr + Phdr[i].p_offset), // source
-                        Phdr[i].p_filesz); // length
-                Print(L"Copied kernel image %08x -> %08x (%08x bytes)\n",
-                        KernelFileAddr, KernelMemAddr, Phdr[i].p_filesz);
-                }
-            if (Phdr[i].p_memsz > Phdr[i].p_filesz) {
-                ZeroMem((VOID*)(KernelMemAddr + Phdr[i].p_filesz),
-                        Phdr[i].p_memsz - Phdr[i].p_filesz);
-            }
-
-            KernelMemSize = Phdr[i].p_memsz;
+            CopyOneSegment(&Phdr[i], KernelFileAddr, LoadAddr);
         } else if (Phdr[i].p_type == PT_DYNAMIC) {
-            Elf64_Dyn *Dynamic = (Elf64_Dyn*)(KernelMemAddr + Phdr[i].p_offset);
-            RelocateDynamic(KernelMemAddr, Dynamic);
+            Elf64_Dyn *Dynamic = (Elf64_Dyn*)(KernelFileAddr + Phdr[i].p_offset);
+            RelocateDynamic(KernelFileAddr, LoadAddr, Dynamic);
         }
     }
 
+    // Call init functions
     typedef void (CtorType)(void);
     Elf64_Shdr *CtorsSection = Elf64_FindSection(Ehdr, ".ctors");
     if (CtorsSection == NULL)
@@ -143,25 +205,22 @@ EFI_STATUS EFIAPI UefiMain(
     }
     else
     {
-        EFI_PHYSICAL_ADDRESS CtorsAddr = KernelMemAddr + CtorsSection->sh_offset;
+        EFI_PHYSICAL_ADDRESS CtorsAddr = CtorsSection->sh_addr + LoadAddr;
+
         for (UINT64 *Ctor = (UINT64*)CtorsAddr;
                 Ctor < (UINT64*)(CtorsAddr + CtorsSection->sh_size);
                 ++Ctor)
         {
-            Print(L"Calling a ctor: %08lx\n", Ctor);
             CtorType *F = (CtorType*)*Ctor;
             F();
         }
     }
 
-    //RelocateAll(Ehdr);
+    Print(L"Successfully loaded kernel\n");
 
-    Print(L"Successfully loaded kernel: Buf=0x%08lx Siz=0x%lx\n",
-        KernelMemAddr, KernelMemSize);
-
+    // Get entry point address
     typedef unsigned long (EntryPointType)(struct BootParam *param);
-    // assume that kernel.elf linked at zero address.
-    EntryPointType *EntryPoint = (EntryPointType*)(Ehdr->e_entry + KernelMemAddr);
+    EntryPointType *EntryPoint = (EntryPointType*)(Ehdr->e_entry + LoadAddr);
     Print(L"Entry point: %08p\n", EntryPoint);
 
     // Open memory map file
@@ -226,8 +285,6 @@ EFI_STATUS EFIAPI UefiMain(
     BootParam.memory_descriptor_size = MemoryMap.DescriptorSize;
     BootParam.graphic_mode = &GraphicMode;
 
-    //while (1) __asm__("hlt");
-    // Jump to the kernel
     EntryPoint(&BootParam);
 
     while (1) __asm__("hlt");

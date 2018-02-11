@@ -60,6 +60,9 @@ EFI_STATUS GetGraphicMode(
         if (!(H * 9 == V * 16 || H * 3 == V * 4)) {
             continue;
         }
+        //if (H > 1280) {
+        //    continue;
+        //}
 
         if (Resolution < H * V) {
             GraphicModeInfoIndex = i;

@@ -5,7 +5,7 @@
 #include <Library/UefiLib.h>
 
 UINTN FindLargestConMode() {
-    UINTN Columns = 0, Rows = 0, Mode = 0;
+    UINTN Columns = 10000, Rows = 10000, Mode = 0;
 
     for (UINTN i = 0; i < gST->ConOut->Mode->MaxMode; i++) {
         UINTN C, R;
